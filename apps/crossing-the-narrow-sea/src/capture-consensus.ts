@@ -9,7 +9,6 @@ const START = Number(process.env.CONSENSUS_START_HEIGHT)
 const END = Number(process.env.CONSENSUS_END_HEIGHT)
 const OUTPUT_DIR = process.env.OUTPUT_DIR || 'exports'
 const DB_PATH = `${OUTPUT_DIR}/xdm.sqlite`
-const LOG_EVERY = Number(process.env.LOG_EVERY || 1000)
 const RETRY_BACKOFF_MS = Number(process.env.RPC_BACKOFF_MS || 1000)
 const RETRY_MAX_BACKOFF_MS = Number(process.env.RPC_MAX_BACKOFF_MS || 10000)
 const BLOCK_CONCURRENCY = Math.max(
@@ -33,7 +32,6 @@ const main = async () => {
   )
 
   let nextHeight = scanStart
-  let processedCount = 0
 
   const getNextHeight = (): number | null => {
     if (nextHeight > END) return null
@@ -68,11 +66,6 @@ const main = async () => {
             logPrefix: '[consensus]',
           })
 
-          processedCount += 1
-          if (processedCount % LOG_EVERY === 0 || processedCount === total) {
-            const pct = Math.floor((processedCount * 100) / Math.max(total, 1))
-            console.log(`[consensus] processed ${processedCount}/${total} (${pct}%) at #${h}`)
-          }
           break
         } catch (err) {
           const msg = (err as Error)?.message || String(err)
