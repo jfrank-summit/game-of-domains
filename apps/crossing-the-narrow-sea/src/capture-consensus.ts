@@ -32,17 +32,39 @@ const main = async () => {
   )
 
   let nextHeight = scanStart
+  let allocationLock: Promise<void> = Promise.resolve()
+  const getNextHeight = async (): Promise<number | null> => {
+    let height: number | null = null
+    allocationLock = allocationLock.then(() => {
+      if (nextHeight > END) {
+        height = null
+        return
+      }
+      height = nextHeight
+      nextHeight += 1
+    })
+    await allocationLock
+    return height
+  }
 
-  const getNextHeight = (): number | null => {
-    if (nextHeight > END) return null
-    const h = nextHeight
-    nextHeight += 1
-    return h
+  let nextToCommit = scanStart
+  const completedHeights = new Set<number>()
+  let commitLock: Promise<void> = Promise.resolve()
+  const markCompleted = async (height: number): Promise<void> => {
+    commitLock = commitLock.then(() => {
+      completedHeights.add(height)
+      while (completedHeights.has(nextToCommit)) {
+        completedHeights.delete(nextToCommit)
+        setLastProcessedBlockHeight(db, 'consensus', nextToCommit)
+        nextToCommit += 1
+      }
+    })
+    await commitLock
   }
 
   const worker = async () => {
     while (true) {
-      const h = getNextHeight()
+      const h = await getNextHeight()
       if (h == null) return
       let backoff = RETRY_BACKOFF_MS
       while (true) {
@@ -53,7 +75,6 @@ const main = async () => {
           const extrinsics = block.block.extrinsics
           if (h % 100 === 0) {
             console.log(`[consensus] processing #${h}`)
-            setLastProcessedBlockHeight(db, 'consensus', h)
           }
 
           processXdmEvents({
@@ -66,6 +87,7 @@ const main = async () => {
             logPrefix: '[consensus]',
           })
 
+          await markCompleted(h)
           break
         } catch (err) {
           const msg = (err as Error)?.message || String(err)
