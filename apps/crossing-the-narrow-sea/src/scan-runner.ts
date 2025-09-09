@@ -64,8 +64,11 @@ export const runScan = async (opts: RunScanOptions): Promise<void> => {
     { length: Math.max(end - scanStart + 1, 0) },
     (_, i) => scanStart + i,
   )
+  const allocationMutex = createMutex()
   const getNextHeight = async (): Promise<number | null> =>
-    heightQueue.length > 0 ? heightQueue.shift()! : null
+    allocationMutex.runExclusive(() =>
+      heightQueue.length > 0 ? (heightQueue.shift() as number) : null,
+    )
 
   let nextToCommit = scanStart
   const completedHeights = new Set<number>()
