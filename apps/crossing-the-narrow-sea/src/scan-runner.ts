@@ -17,25 +17,6 @@ export interface RunScanOptions {
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
-const createMutex = () => {
-  let tail = Promise.resolve()
-  const runExclusive = async <T>(fn: () => T | Promise<T>): Promise<T> => {
-    let release: () => void = () => {}
-    const p = new Promise<void>((resolve) => {
-      release = resolve
-    })
-    const prev = tail
-    tail = prev.then(() => p)
-    await prev
-    try {
-      return await fn()
-    } finally {
-      release()
-    }
-  }
-  return { runExclusive }
-}
-
 export const runScan = async (opts: RunScanOptions): Promise<void> => {
   const {
     rpcEndpoints,
@@ -60,33 +41,22 @@ export const runScan = async (opts: RunScanOptions): Promise<void> => {
     `${logPrefix} capture start: heights ${scanStart}..${end} (total ${Math.max(total, 0)})`,
   )
 
-  const heightQueue: number[] = Array.from(
-    { length: Math.max(end - scanStart + 1, 0) },
-    (_, i) => scanStart + i,
-  )
-  const allocationMutex = createMutex()
-  const getNextHeight = async (): Promise<number | null> =>
-    allocationMutex.runExclusive(() =>
-      heightQueue.length > 0 ? (heightQueue.shift() as number) : null,
-    )
-
+  // Lock-free work distribution: worker i handles scanStart + i, then + blockConcurrency, etc.
+  const totalWork = Math.max(end - scanStart + 1, 0)
+  const processedFlags: boolean[] = Array.from({ length: totalWork }, () => false)
   let nextToCommit = scanStart
-  const completedHeights = new Set<number>()
-  const commitMutex = createMutex()
-  const markCompleted = async (height: number): Promise<void> =>
-    commitMutex.runExclusive(() => {
-      completedHeights.add(height)
-      while (completedHeights.has(nextToCommit)) {
-        completedHeights.delete(nextToCommit)
-        setLastProcessedBlockHeight(db, chain, nextToCommit)
-        nextToCommit += 1
-      }
-    })
 
-  const worker = async () => {
-    while (true) {
-      const h = await getNextHeight()
-      if (h == null) return
+  const advanceCommit = (): void => {
+    while (nextToCommit <= end) {
+      const idx = nextToCommit - scanStart
+      if (!processedFlags[idx]) break
+      setLastProcessedBlockHeight(db, chain, nextToCommit)
+      nextToCommit += 1
+    }
+  }
+
+  const worker = async (workerId: number) => {
+    for (let h = scanStart + workerId; h <= end; h += blockConcurrency) {
       let backoff = retryBackoffMs
       while (true) {
         try {
@@ -108,7 +78,8 @@ export const runScan = async (opts: RunScanOptions): Promise<void> => {
             logPrefix,
           })
 
-          await markCompleted(h)
+          processedFlags[h - scanStart] = true
+          advanceCommit()
           break
         } catch (err) {
           const msg = (err as Error)?.message || String(err)
@@ -120,6 +91,7 @@ export const runScan = async (opts: RunScanOptions): Promise<void> => {
     }
   }
 
-  await Promise.all(Array.from({ length: blockConcurrency }, () => worker()))
+  await Promise.all(Array.from({ length: blockConcurrency }, (_, workerId) => worker(workerId)))
+
   console.log(`${logPrefix} capture complete`)
 }
