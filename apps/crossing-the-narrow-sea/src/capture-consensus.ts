@@ -12,6 +12,10 @@ const DB_PATH = `${OUTPUT_DIR}/xdm.sqlite`
 const LOG_EVERY = Number(process.env.LOG_EVERY || 1000)
 const RETRY_BACKOFF_MS = Number(process.env.RPC_BACKOFF_MS || 1000)
 const RETRY_MAX_BACKOFF_MS = Number(process.env.RPC_MAX_BACKOFF_MS || 10000)
+const BLOCK_CONCURRENCY = Math.max(
+  1,
+  Number(process.env.BLOCK_CONCURRENCY || process.env.RPC_CONCURRENCY || 8),
+)
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 const main = async () => {
@@ -28,43 +32,59 @@ const main = async () => {
     `[consensus] capture start: heights ${scanStart}..${END} (total ${Math.max(total, 0)})`,
   )
 
-  let backoff = RETRY_BACKOFF_MS
-  for (let h = scanStart; h <= END; ) {
-    try {
-      const hash = await api.rpc.chain.getBlockHash(h)
-      const block = await api.rpc.chain.getBlock(hash)
-      const events: any[] = (await api.query.system.events.at(hash)) as any
-      const extrinsics = block.block.extrinsics
-      if (h % 100 === 0) {
-        console.log(`[consensus] processing #${h}`)
-        setLastProcessedBlockHeight(db, 'consensus', h)
-      }
+  let nextHeight = scanStart
+  let processedCount = 0
 
-      processXdmEvents({
-        db,
-        chain: 'consensus',
-        events,
-        extrinsics,
-        blockHeight: h,
-        blockHash: hash.toString(),
-        logPrefix: '[consensus]',
-      })
+  const getNextHeight = (): number | null => {
+    if (nextHeight > END) return null
+    const h = nextHeight
+    nextHeight += 1
+    return h
+  }
 
-      const processed = h - scanStart + 1
-      if (processed % LOG_EVERY === 0 || h === END) {
-        const pct = Math.floor((processed * 100) / total)
-        console.log(`[consensus] processed ${processed}/${total} (${pct}%) at #${h}`)
+  const worker = async () => {
+    while (true) {
+      const h = getNextHeight()
+      if (h == null) return
+      let backoff = RETRY_BACKOFF_MS
+      while (true) {
+        try {
+          const hash = await api.rpc.chain.getBlockHash(h)
+          const block = await api.rpc.chain.getBlock(hash)
+          const events: any[] = (await api.query.system.events.at(hash)) as any
+          const extrinsics = block.block.extrinsics
+          if (h % 100 === 0) {
+            console.log(`[consensus] processing #${h}`)
+            setLastProcessedBlockHeight(db, 'consensus', h)
+          }
+
+          processXdmEvents({
+            db,
+            chain: 'consensus',
+            events,
+            extrinsics,
+            blockHeight: h,
+            blockHash: hash.toString(),
+            logPrefix: '[consensus]',
+          })
+
+          processedCount += 1
+          if (processedCount % LOG_EVERY === 0 || processedCount === total) {
+            const pct = Math.floor((processedCount * 100) / Math.max(total, 1))
+            console.log(`[consensus] processed ${processedCount}/${total} (${pct}%) at #${h}`)
+          }
+          break
+        } catch (err) {
+          const msg = (err as Error)?.message || String(err)
+          console.warn(`[consensus] error at #${h}: ${msg}. retrying in ${backoff}ms`)
+          await sleep(backoff)
+          backoff = Math.min(backoff * 2, RETRY_MAX_BACKOFF_MS)
+        }
       }
-      h += 1
-      backoff = RETRY_BACKOFF_MS
-    } catch (err) {
-      const msg = (err as Error)?.message || String(err)
-      console.warn(`[consensus] error at #${h}: ${msg}. retrying in ${backoff}ms`)
-      await sleep(backoff)
-      backoff = Math.min(backoff * 2, RETRY_MAX_BACKOFF_MS)
-      // retry same height
     }
   }
+
+  await Promise.all(Array.from({ length: BLOCK_CONCURRENCY }, () => worker()))
   console.log('[consensus] capture complete')
 }
 

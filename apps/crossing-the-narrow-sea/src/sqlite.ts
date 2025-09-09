@@ -167,6 +167,6 @@ export const setLastProcessedBlockHeight = (
 ): void => {
   ensureTables(db)
   db.prepare(
-    'INSERT INTO scan_progress(chain, last_block_height) VALUES (?, ?) ON CONFLICT(chain) DO UPDATE SET last_block_height=excluded.last_block_height',
+    'INSERT INTO scan_progress(chain, last_block_height) VALUES (?, ?) ON CONFLICT(chain) DO UPDATE SET last_block_height=MAX(last_block_height, excluded.last_block_height)',
   ).run(chain, height)
 }

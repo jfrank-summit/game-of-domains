@@ -112,6 +112,7 @@ export const getEventsAt = async (api: ApiPromise, hash: any, useSegments: boole
   if (useSegments && (api.query as any)?.system?.eventSegments) {
     try {
       const SEGMENT_SIZE = 100
+      const SEGMENT_CONCURRENCY = Math.max(1, Number(process.env.SEGMENT_CONCURRENCY || 8))
       // Prefer using eventsCount if available to determine number of segments
       let numSegments: number | null = null
       if ((api.query as any)?.system?.eventsCount?.at) {
@@ -144,10 +145,15 @@ export const getEventsAt = async (api: ApiPromise, hash: any, useSegments: boole
         unwrapSegment(await (api.query as any).system.eventSegments.at(hash, index))
 
       if (numSegments != null) {
-        for (let i = 0; i < numSegments; i++) {
-          const arr = await fetchSegment(i)
-          if (!arr.length) continue
-          for (const e of arr) flattened.push(e)
+        for (let start = 0; start < numSegments; start += SEGMENT_CONCURRENCY) {
+          const end = Math.min(numSegments, start + SEGMENT_CONCURRENCY)
+          const results = await Promise.all(
+            Array.from({ length: end - start }, (_, offset) => fetchSegment(start + offset)),
+          )
+          for (const arr of results) {
+            if (!arr.length) continue
+            for (const e of arr) flattened.push(e)
+          }
         }
       } else if ((api.query as any).system.eventSegments.entriesAt) {
         // entriesAt fallback (older api) – value is (Option<Vec<EventRecord>> | Vec<EventRecord>)
