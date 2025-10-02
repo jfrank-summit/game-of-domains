@@ -23,6 +23,7 @@
     "capture:consensus": "tsx src/capture-consensus.ts",
     "capture:domain": "tsx src/capture-domain.ts",
     "match": "tsx src/match.ts",
-    "counts": "tsx src/counts.ts"
+    "counts": "tsx src/counts.ts",
+    "counts:html": "tsx src/counts.ts --html"
   }
 }

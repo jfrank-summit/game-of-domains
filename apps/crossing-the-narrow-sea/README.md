@@ -47,6 +47,7 @@ yarn workspace crossing-the-narrow-sea capture:domain
 ```
 yarn workspace crossing-the-narrow-sea match
 yarn workspace crossing-the-narrow-sea counts
+yarn workspace crossing-the-narrow-sea counts:html  # Optional: generate HTML leaderboard
 ```
 
 ## Scripts
@@ -54,4 +55,5 @@ yarn workspace crossing-the-narrow-sea counts
 - `capture:consensus` — scan consensus blocks and persist evidence to SQLite
 - `capture:domain` — scan domain blocks and persist evidence to SQLite
 - `match` — offline join by `(channel_id, nonce)` using `ACK_MODE`; writes `d2c_transfers.ndjson` and `c2d_transfers.ndjson`
-- `counts` — aggregate per-wallet counts by direction from NDJSON; writes `counts_per_wallet.json`
+- `counts` — aggregate per-wallet counts by direction from NDJSON; writes `counts_per_wallet.json` with XDM transfer share for each wallet
+- `counts:html` — same as `counts` but also generates `leaderboard.html`, an easy-to-read interactive leaderboard with search
